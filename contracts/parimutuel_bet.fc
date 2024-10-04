@@ -1,0 +1,92 @@
+#pragma version >=0.2.0;
+
+#include "stdlib.fc";
+
+;; Storage
+;; storage#_ owner_address:MsgAddress total_bets_a:uint64 total_bets_b:uint64 outcome:uint8 = Storage;
+
+(slice, int, int, int) load_data() inline {
+    var ds = get_data().begin_parse();
+    return (
+        ds~load_msg_addr(), ;; owner_address
+        ds~load_uint(64),   ;; total_bets_a
+        ds~load_uint(64),   ;; total_bets_b
+        ds~load_uint(8)     ;; outcome
+    );
+}
+
+() save_data(slice owner_address, int total_bets_a, int total_bets_b, int outcome) impure inline {
+    set_data(begin_cell()
+        .store_slice(owner_address)
+        .store_uint(total_bets_a, 64)
+        .store_uint(total_bets_b, 64)
+        .store_uint(outcome, 8)
+        .end_cell());
+}
+
+;; Messages
+;; bet#_ bet:uint64 choice:uint8 = InternalMsgBody;
+;; set_outcome#_ outcome:uint8 = InternalMsgBody;
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+    
+    (slice owner_address, int total_bets_a, int total_bets_b, int outcome) = load_data();
+    
+    int op = in_msg_body~load_uint(32);
+    
+    if (op == 0) { ;; Bet
+        int bet_amount = in_msg_body~load_uint(64);
+        int choice = in_msg_body~load_uint(8);
+        
+        throw_unless(100, msg_value >= bet_amount);
+        throw_unless(101, (choice == 0) | (choice == 1));
+        throw_unless(102, outcome == 0); ;; Betting is still open
+        
+        if (choice == 0) {
+            total_bets_a += bet_amount;
+        } else {
+            total_bets_b += bet_amount;
+        }
+        
+        save_data(owner_address, total_bets_a, total_bets_b, outcome);
+        return ();
+    }
+    
+    if (op == 1) { ;; Set outcome
+        throw_unless(103, equal_slices(sender_address, owner_address));
+        outcome = in_msg_body~load_uint(8);
+        throw_unless(104, (outcome == 1) | (outcome == 2));
+        
+        save_data(owner_address, total_bets_a, total_bets_b, outcome);
+        return ();
+    }
+    
+    throw(0xffff); ;; If the message is unknown
+}
+
+;; Get methods
+
+int get_total_bets_a() method_id {
+    (_, int total_bets_a, _, _) = load_data();
+    return total_bets_a;
+}
+
+int get_total_bets_b() method_id {
+    (_, _, int total_bets_b, _) = load_data();
+    return total_bets_b;
+}
+
+int get_outcome() method_id {
+    (_, _, _, int outcome) = load_data();
+    return outcome;
+}
